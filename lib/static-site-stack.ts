@@ -5,13 +5,13 @@ import * as route53 from 'aws-cdk-lib/aws-route53';
 import * as acm from 'aws-cdk-lib/aws-certificatemanager';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as origins from 'aws-cdk-lib/aws-cloudfront-origins';
-import * as wafv2 from 'aws-cdk-lib/aws-wafv2';
+// import * as wafv2 from 'aws-cdk-lib/aws-wafv2'; // Removed WAF
 import { Construct } from 'constructs';
 
 export interface StaticSiteStackProps extends cdk.StackProps {
   domainName: string;
   siteSubDomain: string;
-  wafRateLimit?: number; // Optional: Number of requests for rate-based rule (e.g., 500 per 5 minutes)
+  // wafRateLimit?: number; // Removed WAF
 }
 
 export class StaticSiteStack extends cdk.Stack {
@@ -19,74 +19,10 @@ export class StaticSiteStack extends cdk.Stack {
     super(scope, id, props);
 
     const siteDomain = props.siteSubDomain + '.' + props.domainName;
-    const rateLimit = props.wafRateLimit ?? 500; // Default to 500 if not provided
+    // const rateLimit = props.wafRateLimit ?? 500; // Removed WAF
 
-    // WAF v2 WebACL for CloudFront
-    const webAcl = new wafv2.CfnWebACL(this, 'WebACL', {
-      defaultAction: { allow: {} }, // Default action is allow
-      scope: 'CLOUDFRONT',
-      visibilityConfig: {
-        cloudWatchMetricsEnabled: true,
-        metricName: 'StaticSiteWebACL',
-        sampledRequestsEnabled: true,
-      },
-      name: `${siteDomain}-WebACL`,
-      rules: [
-        // Rule 1: AWS Managed Rules - CommonRuleSet
-        {
-          name: 'AWS-AWSManagedRulesCommonRuleSet',
-          priority: 1,
-          statement: {
-            managedRuleGroupStatement: {
-              vendorName: 'AWS',
-              name: 'AWSManagedRulesCommonRuleSet',
-            },
-          },
-          overrideAction: { none: {} },
-          visibilityConfig: {
-            cloudWatchMetricsEnabled: true,
-            metricName: 'AWSManagedRulesCommonRuleSet',
-            sampledRequestsEnabled: true,
-          },
-        },
-        // Rule 2: AWS Managed Rules - AmazonIpReputationList
-        {
-          name: 'AWS-AWSManagedRulesAmazonIpReputationList',
-          priority: 2,
-          statement: {
-            managedRuleGroupStatement: {
-              vendorName: 'AWS',
-              name: 'AWSManagedRulesAmazonIpReputationList',
-            },
-          },
-          overrideAction: { none: {} },
-          visibilityConfig: {
-            cloudWatchMetricsEnabled: true,
-            metricName: 'AWSManagedRulesAmazonIpReputationList',
-            sampledRequestsEnabled: true,
-          },
-        },
-        // Rule 3: Rate-based Rule
-        {
-          name: 'RateLimitRule',
-          priority: 3,
-          action: {
-            block: {}, // Action to take when rate limit is exceeded
-          },
-          statement: {
-            rateBasedStatement: {
-              limit: rateLimit, // Number of requests per 5 minutes per IP
-              aggregateKeyType: 'IP',
-            },
-          },
-          visibilityConfig: {
-            cloudWatchMetricsEnabled: true,
-            metricName: 'RateLimitRule',
-            sampledRequestsEnabled: true,
-          },
-        },
-      ],
-    });
+    // WAF v2 WebACL for CloudFront - REMOVED
+    // const webAcl = new wafv2.CfnWebACL(this, 'WebACL', { ... });
 
     // S3 bucket for static website hosting
     const siteBucket = new s3.Bucket(this, 'SiteBucket', {
@@ -132,8 +68,8 @@ export class StaticSiteStack extends cdk.Stack {
       defaultRootObject: 'index.html',
       domainNames: [siteDomain],
       certificate: certificate,
-      // Associate WAF
-      webAclId: webAcl.attrArn,
+      // Associate WAF - REMOVED
+      // webAclId: webAcl.attrArn,
       defaultBehavior: {
         origin: new origins.S3Origin(siteBucket, { originAccessIdentity: oai }),
         allowedMethods: cloudfront.AllowedMethods.ALLOW_GET_HEAD,

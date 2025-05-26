@@ -21,8 +21,8 @@ new StaticSiteStack(app, 'StaticSiteStack', {
   },
   domainName: domainName,
   siteSubDomain: siteSubDomain,
-  description: `Static site hosting for ${siteSubDomain}.${domainName}`,
-  wafRateLimit: 1000, // Example: Allow 1000 requests per IP per 5 minutes
+  description: `Static site hosting for ${siteSubDomain}.${domainName}`
+  // wafRateLimit: 1000, // Removed WAF
 });
 
 app.synth();
