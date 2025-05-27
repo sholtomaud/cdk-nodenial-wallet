@@ -1,40 +1,36 @@
-# Secure Static Website with AWS CDK (No WAF)
+# Secure Static Website with AWS CDK (with AWS WAF)
 
-This project deploys a static website using AWS CDK, hosted on S3 and distributed via CloudFront, with a custom domain managed by Route 53 and an ACM certificate for HTTPS. This version **does not** include AWS WAF for cost considerations.
+This project deploys a static website using AWS CDK, hosted on S3 and distributed via CloudFront, with a custom domain managed by Route 53 and an ACM certificate for HTTPS. This version **includes AWS WAF** to enhance security.
 
 ## Architecture
 - **Amazon S3**: Stores the static website content (HTML, CSS, JavaScript, images).
 - **Amazon CloudFront**: Acts as a Content Delivery Network (CDN) to cache and serve website content globally, improving performance and reducing latency. It's configured with an Origin Access Identity (OAI) to restrict direct access to the S3 bucket.
 - **AWS Certificate Manager (ACM)**: Provides an SSL/TLS certificate to enable HTTPS for the custom domain.
 - **Amazon Route 53**: Manages the DNS for the custom domain, pointing it to the CloudFront distribution.
+- **AWS WAF**: Provides a web application firewall to protect the CloudFront distribution against common web exploits and offers rate limiting to mitigate DDoS attacks.
 
-## Security Considerations (Denial of Wallet without AWS WAF)
+## Security Enhancements with AWS WAF
 
-Deploying a static website on AWS S3 and CloudFront provides a good baseline of security and availability. However, without AWS WAF, there are specific considerations regarding "Denial of Wallet" (DoW) attacks, where an attacker attempts to generate excessive costs.
+This deployment includes AWS WAF (Web Application Firewall) associated with the CloudFront distribution, offering several security benefits:
 
-**Mitigations in Place:**
-- **Origin Access Identity (OAI)**: CloudFront uses an OAI to access the S3 bucket. This prevents direct public access to the S3 bucket, ensuring that all traffic must go through CloudFront. This protects your S3 costs from direct hits.
-- **AWS Shield Standard**: Your AWS account automatically benefits from AWS Shield Standard. This service provides protection against many common network and transport layer DDoS attacks (e.g., SYN floods, UDP reflection attacks) that target your CloudFront distribution. There is no additional charge for Shield Standard.
-- **CloudFront Caching**: By caching your static content at Edge Locations, CloudFront reduces the number of requests to your S3 origin, which can help mitigate costs from certain types of traffic.
+- **Protection Against Common Web Exploits**: WAF can help filter out malicious traffic such as SQL injection and Cross-Site Scripting (XSS), although the risk for purely static sites is primarily related to any client-side scripts interacting with external services.
+- **Rate Limiting**: A rate-based rule is configured to block IP addresses that exceed a certain number of requests within a 5-minute period. This helps protect against HTTP flood DDoS attacks and abusive bot activity. The default rate limit is set to 500 requests per 5 minutes per IP, but this can be customized.
+- **Managed Rule Sets (Optional)**: While not included by default in this basic setup, AWS WAF allows for the addition of AWS Managed Rule Groups (e.g., for Amazon IP reputation, known bad inputs) and custom rules to further enhance protection.
 
-**Limitations and Risks without AWS WAF:**
-- **No Application-Layer Filtering**: AWS WAF provides rules to inspect web requests for malicious patterns (like XSS, SQL injection - though SQLi is less relevant for static sites) and filter them out. Without WAF, you are more exposed to application-layer attacks if your frontend code has vulnerabilities or interacts with other APIs.
-- **Vulnerability to Sophisticated Bots and Targeted Attacks**: While Shield Standard handles large-scale DDoS, more sophisticated bots or targeted attacks designed to generate high request volumes (even if the requests are for valid content) can still lead to increased CloudFront data transfer and request costs. WAF's rate-based rules and managed rule sets (like Amazon IP Reputation List) are specifically designed to counter these.
-- **Higher Risk of Bill Shock**: Without the granular request inspection and blocking capabilities of WAF, there's a higher inherent risk that unexpected traffic spikes (malicious or not) could lead to a surprisingly high AWS bill.
+**Mitigations Already in Place (Complementary to WAF):**
+- **Origin Access Identity (OAI)**: CloudFront uses an OAI to access the S3 bucket, preventing direct public S3 bucket access.
+- **AWS Shield Standard**: Provides baseline protection against common network and transport layer DDoS attacks.
 
-**Recommendations to Further Mitigate DoW Risks:**
-1.  **AWS Budgets**: Configure AWS Budgets to alert you when your costs exceed predefined thresholds. This won't stop an attack but will provide early notification of unusual spending.
+**Recommendations for Ongoing Security Management:**
+1.  **AWS Budgets**: Configure AWS Budgets to alert you when your costs exceed predefined thresholds. This provides early notification of unusual spending, which could be an indicator of an attack.
 2.  **CloudWatch Alarms**:
-    - Set alarms on key CloudFront metrics:
-        - `Requests`: Monitor for unusual spikes in the number of requests.
-        - `BytesDownloaded`: Track data transfer out, a primary cost driver.
-        - `4xxErrorRate` and `5xxErrorRate`: Spikes can indicate attack attempts or issues.
-    - Set alarms on S3 bucket metrics like `GetRequests` (though most should come via CloudFront).
+    - Monitor key CloudFront metrics: `Requests`, `BytesDownloaded`, `4xxErrorRate`, `5xxErrorRate`.
+    - Monitor WAF metrics: `BlockedRequests` for the rate-based rule and the WebACL itself.
 3.  **Regularly Review Logs**:
-    - Enable and periodically review CloudFront access logs. Store them in a separate S3 bucket.
-    - Enable and review S3 server access logs if needed, though CloudFront logs are usually more relevant for traffic analysis.
-4.  **CloudFront Geo-restrictions**: If your website targets a specific geographic audience, configure CloudFront geo-restrictions to block traffic from other regions known for malicious activity.
-5.  **Implement Strong Cache-Control Headers**: Ensure your static assets have appropriate `Cache-Control` headers to maximize caching by browsers and CloudFront, reducing origin fetches.
+    - Enable and periodically review CloudFront access logs (consider using Amazon Athena for querying).
+    - Enable and review WAF logs to understand blocked traffic and refine rules if necessary.
+4.  **CloudFront Geo-restrictions**: If your website targets a specific geographic audience, consider using CloudFront geo-restrictions in addition to WAF rules.
+5.  **Implement Strong Cache-Control Headers**: Maximize caching to reduce origin load and improve performance.
 
 ## Deployment
 
@@ -45,7 +41,8 @@ The stack's behavior is primarily configured through properties in `bin/app.ts` 
 1.  **Domain and Subdomain (in `bin/app.ts`):**
     Open `bin/app.ts` and set:
     - `domainName`: Your registered domain name (e.g., `example.com`). This is used for creating resource names, the S3 bucket, the ACM certificate, and as a fallback for the Route 53 zone name.
-    - `siteSubDomain`: Your desired subdomain (e.g., `www`). For a root domain setup (e.g., `example.com` directly), you might set this to an empty string (`''`) and ensure your S3 bucket naming and CloudFront CNAMEs are adjusted accordingly if needed (though the current setup primarily targets a subdomain like `www.example.com`).
+    - `siteSubDomain`: Your desired subdomain (e.g., `www`).
+    - `wafRateLimit` (Optional): The maximum number of requests allowed from a single IP address within a 5-minute period before that IP is blocked. If not specified, it defaults to `500`. In the provided `bin/app.ts`, this is set to `1000`. You can adjust this value based on your expected traffic patterns.
 
 2.  **Route 53 Hosted Zone (via CDK Context):**
     The `hostedZoneId` and `zoneName` for Route 53 are configured via CDK context. This is ideal for CI/CD.
@@ -122,9 +119,9 @@ Automating the deployment of your website content (HTML, CSS, JS, images) is hig
     - Synchronize your static files to the S3 website bucket. The bucket name is derived from `siteSubDomain` and `domainName` (e.g., `www.your.domain.com`).
     - Use the AWS CLI `s3 sync` command. The `--delete` flag is crucial as it removes files from S3 that are no longer in your source folder, ensuring a clean deployment.
       ```bash
-      aws s3 sync ./your-public-folder/ s3://your-bucket-name --delete
-      # Replace ./your-public-folder/ with the actual path to your built static files.
+      aws s3 sync ./site/ s3://your-bucket-name --delete
       # Replace your-bucket-name with the S3 bucket name (e.g., www.example.com).
+      # This command syncs the content of your local 'site/' directory to the S3 bucket.
       ```
 
 4.  **CloudFront Invalidation**:
@@ -161,3 +158,49 @@ This entire CI/CD pipeline can be automated using services like:
 - **Jenkins**, and others.
 
 These tools can listen for Git pushes, run build commands, execute S3 sync, and trigger CloudFront invalidations automatically.
+
+## Testing AWS WAF Rate-Based Rule
+
+This section explains how to test the AWS WAF rate-based rule functionality.
+
+The WAF is configured with a rate-based rule. By default, this is set in `lib/static-site-stack.ts` to 500 requests per 5-minute period per IP, but it's overridden in `bin/app.ts` to 1000 requests. Adjust this value in `bin/app.ts` (`wafRateLimit`) as needed for your expected traffic.
+
+**Prerequisites for testing:**
+
+*   The CDK stack must be successfully deployed.
+*   You need the website URL (either the CloudFront distribution URL like `d123example.cloudfront.net` or your configured custom domain like `www.example.com`).
+
+**Testing Steps (General Guidance):**
+
+You can test the rate-limiting by simulating a high volume of requests from a single IP address. Tools like Apache Bench (`ab`), `curl` in a loop, or simple scripts can be used for this.
+
+Example using `curl` (run from a Linux/macOS terminal):
+```bash
+# Replace YOUR_WEBSITE_URL with your actual site URL (e.g., https://www.example.com or https://d123example.cloudfront.net)
+# This sends 1200 requests. Adjust count based on your wafRateLimit (e.g., if 1000, send ~1100-1200).
+for i in {1..1200}; do curl -s -o /dev/null -w "%{http_code}\n" YOUR_WEBSITE_URL; sleep 0.1; done
+```
+
+**Expected Outcome:**
+
+*   Initially, you should see `200` (OK) responses.
+*   After exceeding the rate limit (e.g., 1000 requests within 5 minutes for the default configuration in `bin/app.ts`), you should start seeing `403` (Forbidden) responses from CloudFront. This indicates that AWS WAF has blocked the requests from your IP.
+*   The block will typically last for a few minutes for rate-based rules before the IP is automatically unblocked, unless further requests from the same IP keep it above the threshold.
+
+**Verification in AWS Console:**
+
+You can monitor WAF activity in the AWS Management Console:
+
+1.  Navigate to the **WAF & Shield** console.
+2.  In the navigation pane, under **AWS WAF**, choose **Web ACLs**.
+3.  Select your Web ACL from the list (e.g., `SiteWebACL` or the name you configured).
+4.  On the **Overview** tab, you can see graphs of allowed and blocked requests. Look for an increase in blocked requests by the rate-based rule.
+5.  The **Sampled requests** tab can show details of requests that WAF has evaluated, including those that were blocked.
+6.  Associated CloudWatch metrics for the Web ACL (e.g., `webACLMetric` and `RateLimitRuleMetric`) will also show allowed vs. blocked requests over time. You can find these in the CloudWatch console.
+
+**Important Considerations:**
+
+*   **Testing Costs**: Be mindful of any potential costs associated with CloudFront data transfer or WAF requests, though these should be minimal for this type of isolated test.
+*   **Authorization**: Ensure you are only testing against your own resources and have proper authorization.
+*   **Timing and Count**: The exact number of requests needed to trigger the block might vary slightly due to how WAF aggregates requests over its 5-minute evaluation period. Sending a burst slightly over the limit is a good way to test.
+*   **IP Address**: Ensure the test traffic originates from a consistent public IP address that WAF can track. If you are behind a corporate NAT or VPN, all users sharing that egress IP will contribute to the same rate limit count.
