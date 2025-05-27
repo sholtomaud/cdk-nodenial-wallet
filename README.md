@@ -38,28 +38,126 @@ Deploying a static website on AWS S3 and CloudFront provides a good baseline of 
 
 ## Deployment
 
-Before deploying, you **must** update placeholder values in the CDK code:
-1.  Open `bin/app.ts`:
-    - Update `hostedZoneIdPlaceholder` with your actual Route 53 Hosted Zone ID.
-    - Update `domainNamePlaceholder` with your desired domain (e.g., `example.com`).
-    - Update `subdomainPlaceholder` with your desired subdomain (e.g., `www`).
-    - Optionally, update `awsAccount` and `awsRegion` if not using default environment settings.
-2.  Open `lib/static-site-stack.ts`:
-    - Review and update the `certificateValidationRegion` if needed (defaults to `us-east-1` for CloudFront edge certificates).
+**Configuration:**
+
+The stack's behavior is primarily configured through properties in `bin/app.ts` and CDK context values (either in `cdk.json` or via CLI flags).
+
+1.  **Domain and Subdomain (in `bin/app.ts`):**
+    Open `bin/app.ts` and set:
+    - `domainName`: Your registered domain name (e.g., `example.com`). This is used for creating resource names, the S3 bucket, the ACM certificate, and as a fallback for the Route 53 zone name.
+    - `siteSubDomain`: Your desired subdomain (e.g., `www`). For a root domain setup (e.g., `example.com` directly), you might set this to an empty string (`''`) and ensure your S3 bucket naming and CloudFront CNAMEs are adjusted accordingly if needed (though the current setup primarily targets a subdomain like `www.example.com`).
+
+2.  **Route 53 Hosted Zone (via CDK Context):**
+    The `hostedZoneId` and `zoneName` for Route 53 are configured via CDK context. This is ideal for CI/CD.
+    - **`hostedZoneId`**: The ID of your public hosted zone in Route 53 (e.g., `Z0123456789ABCDEFGHIJ`).
+    - **`zoneName`**: The domain name of your hosted zone (e.g., `example.com`).
+
+    You can set these in `cdk.json` under the `context` key:
+    ```json
+    // cdk.json
+    {
+      "app": "...",
+      "context": {
+        // ... other context variables
+        "hostedZoneId": "YOUR_HOSTED_ZONE_ID_HERE",
+        "zoneName": "your.domain.com"
+      }
+    }
+    ```
+    Alternatively, pass them via CLI flags (these override `cdk.json` values):
+    ```bash
+    cdk deploy --context hostedZoneId=YOUR_HOSTED_ZONE_ID --context zoneName=YOUR_ZONE_NAME
+    ```
+    If not provided, the stack uses fallback placeholders defined in `lib/static-site-stack.ts` (`Z0123456789ABCDEFGHIJ` for `hostedZoneId` and `props.domainName` for `zoneName`). **Providing your actual `hostedZoneId` is crucial for successful deployment.**
+
+3.  **AWS Account and Region (in `bin/app.ts`):**
+    Configure the target AWS account and region in `bin/app.ts`:
+    ```typescript
+    // bin/app.ts
+    env: {
+      account: process.env.CDK_DEFAULT_ACCOUNT || 'YOUR_ACCOUNT_ID', // Or your specific account
+      region: process.env.CDK_DEFAULT_REGION || 'YOUR_REGION',   // Or your specific region
+    },
+    ```
 
 **Deployment Commands:**
 ```bash
-# Install dependencies (if you haven't already)
+# Install dependencies
 npm install
 
-# Bootstrap your AWS environment (only needed once per environment)
-cdk bootstrap aws://ACCOUNT-ID/REGION # Replace ACCOUNT-ID and REGION
+# Bootstrap AWS environment (once per account/region)
+# Ensure us-east-1 is also bootstrapped if deploying the certificate there and it's different from your main stack region.
+npx cdk bootstrap aws://ACCOUNT-ID/REGION # Replace ACCOUNT-ID and REGION
 
-# Synthesize the CloudFormation template
-cdk synth
+# Synthesize (optional, deploy does it too)
+# Values from cdk.json are used by default if not overridden by --context
+npx cdk synth 
+# Or with CLI context:
+# npx cdk synth --context hostedZoneId=YOUR_HOSTED_ZONE_ID --context zoneName=YOUR_ZONE_NAME
 
 # Deploy the stack
-cdk deploy
+# Values from cdk.json are used by default if not overridden by --context
+npx cdk deploy
+# Or with CLI context:
+# npx cdk deploy --context hostedZoneId=YOUR_HOSTED_ZONE_ID --context zoneName=YOUR_ZONE_NAME
 ```
 
-Remember to manage your DNS records in Route 53 according to your domain registrar's requirements. The ACM certificate validation will also typically require you to add CNAME records to your DNS zone.
+**Important Notes:**
+- The ACM certificate for CloudFront must be in `us-east-1`. The stack handles this.
+- Ensure your domain's NS records at your registrar point to the Route 53 name servers for the specified hosted zone.
+- DNS validation for ACM will attempt to create CNAME records in your Route 53 hosted zone.
+
+## CI/CD Pipeline for Content Updates
+
+Automating the deployment of your website content (HTML, CSS, JS, images) is highly recommended. Here's a typical workflow:
+
+1.  **Trigger**:
+    - A code push to a specific branch (e.g., `main`, `master`, or `prod`) in your Git repository (e.g., GitHub, AWS CodeCommit, GitLab).
+
+2.  **Build (Optional)**:
+    - If you're using a static site generator (SSG) like Hugo, Jekyll, Next.js (static export), Gatsby, etc., this step involves running the build command (e.g., `npm run build`, `hugo`) to compile your site into static files (typically in a `public/`, `dist/`, or `_site/` folder).
+    - For plain HTML/CSS/JS sites, this step might include linting, minification, or other asset optimization.
+
+3.  **Deploy to S3**:
+    - Synchronize your static files to the S3 website bucket. The bucket name is derived from `siteSubDomain` and `domainName` (e.g., `www.your.domain.com`).
+    - Use the AWS CLI `s3 sync` command. The `--delete` flag is crucial as it removes files from S3 that are no longer in your source folder, ensuring a clean deployment.
+      ```bash
+      aws s3 sync ./your-public-folder/ s3://your-bucket-name --delete
+      # Replace ./your-public-folder/ with the actual path to your built static files.
+      # Replace your-bucket-name with the S3 bucket name (e.g., www.example.com).
+      ```
+
+4.  **CloudFront Invalidation**:
+    - After successfully syncing files to S3, you need to tell CloudFront to fetch the updated content from the origin (S3). This is done by creating an invalidation.
+    - The CloudFront Distribution ID is an output of the `cdk deploy` command (or can be found in the AWS Console).
+      ```bash
+      aws cloudfront create-invalidation --distribution-id YOUR_DISTRIBUTION_ID --paths "/*"
+      # Replace YOUR_DISTRIBUTION_ID with your actual CloudFront distribution ID.
+      ```
+
+**Cache-Busting Filenames:**
+
+- **Technique**: This involves embedding a hash of the file's content into its name (e.g., `main.a1b2c3d4.css`, `bundle.x7y8z9w0.js`). When a file's content changes, its name (and hash) changes.
+- **Benefits**:
+    - Users receive the latest versions immediately because their browsers will request a new file (due to the changed name).
+    - Avoids reliance on CloudFront cache expiry or waiting for invalidation propagation.
+    - Allows for very long cache times (e.g., `Cache-Control: public, max-age=31536000, immutable`) for versioned assets, improving performance.
+    - Your main `index.html` file should have a short cache time or `Cache-Control: no-cache` to ensure it always references the latest hashed assets.
+- **Implementation**: Most modern static site generators and build tools (like Webpack, Rollup, Parcel) handle this automatically.
+
+**Role of CloudFront Invalidations:**
+
+- **Purpose**: Invalidations instruct CloudFront to mark cached objects at its edge locations as "expired." The next time a user requests an invalidated object, CloudFront fetches the latest version from the S3 origin.
+- **`/*` Invalidation**: Invalidating all paths with `/*` is a blanket approach. It's simple but can be costly if you have many objects and update frequently, as AWS charges for invalidation paths (though there's a monthly free tier).
+- **Specific Path Invalidations**: If you know which files have changed, you can invalidate only those specific paths (e.g., `/css/style.css`, `/js/main.js`). This is more cost-effective.
+- **Propagation Delay**: Even after an invalidation is created, it takes some time (typically a few minutes) for it to propagate across all CloudFront edge locations. Cache-busting filenames are a more robust solution for immediate updates.
+
+**Automation Tools:**
+
+This entire CI/CD pipeline can be automated using services like:
+- **GitHub Actions**
+- **AWS CodePipeline** (integrates well with AWS CodeCommit, CodeBuild, S3, etc.)
+- **GitLab CI/CD**
+- **Jenkins**, and others.
+
+These tools can listen for Git pushes, run build commands, execute S3 sync, and trigger CloudFront invalidations automatically.

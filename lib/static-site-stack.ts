@@ -48,12 +48,14 @@ export class StaticSiteStack extends cdk.Stack {
     }));
 
     // Look up existing Route 53 Hosted Zone
-    // In a CI/CD or no-credential environment, fromLookup will fail.
-    // Using fromHostedZoneAttributes with dummy values for synthesis purposes.
-    // Replace these with actual values or use fromLookup in a credentialed environment.
+    // For CI/CD: Attempt to get zone info from CDK context, otherwise use placeholders/props.
+    // Values can be passed to cdk deploy/synth via --context hostedZoneId=YOUR_ID --context zoneName=YOUR_ZONENAME
+    const contextHostedZoneId = this.node.tryGetContext('hostedZoneId') || 'Z0123456789ABCDEFGHIJ'; // Fallback placeholder
+    const contextZoneName = this.node.tryGetContext('zoneName') || props.domainName; // Fallback to props.domainName
+
     const hostedZone = route53.HostedZone.fromHostedZoneAttributes(this, 'HostedZone', {
-      hostedZoneId: 'Z0123456789ABCDEFGHIJ', // Placeholder Hosted Zone ID
-      zoneName: props.domainName,
+      hostedZoneId: contextHostedZoneId,
+      zoneName: contextZoneName,
     });
 
     // ACM certificate for the custom domain (must be in us-east-1)
