@@ -19,6 +19,7 @@ export class StaticSiteStack extends cdk.Stack {
     super(scope, id, props);
 
     const siteDomain = props.siteSubDomain + '.' + props.domainName;
+
     // const rateLimit = props.wafRateLimit ?? 500;
 
     // WAF v2 WebACL for CloudFront
@@ -50,6 +51,7 @@ export class StaticSiteStack extends cdk.Stack {
     //     },
     //   ],
     // });
+
 
     // S3 bucket for static website hosting
     const siteBucket = new s3.Bucket(this, 'SiteBucket', {
@@ -99,6 +101,7 @@ export class StaticSiteStack extends cdk.Stack {
       certificate: certificate,
     // Associate WAF
     // webAclId: webAcl.attrArn,
+
       defaultBehavior: {
         origin: new origins.S3Origin(siteBucket, { originAccessIdentity: oai }),
         allowedMethods: cloudfront.AllowedMethods.ALLOW_GET_HEAD,
