@@ -1,0 +1,9 @@
+# Ignore artifacts
+cdk.out/
+dist/
+node_modules/
+coverage/
+
+# Ignore package lock files
+package-lock.json
+yarn.lock

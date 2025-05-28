@@ -1,206 +1,200 @@
-# Secure Static Website with AWS CDK (with AWS WAF)
+# Secure Static Website with AWS CDK, CI/CD Pipeline, and Blue/Green Deployments
 
-This project deploys a static website using AWS CDK, hosted on S3 and distributed via CloudFront, with a custom domain managed by Route 53 and an ACM certificate for HTTPS. This version **includes AWS WAF** to enhance security.
+This project deploys a static website using AWS CDK, hosted on S3 and distributed via CloudFront, with a custom domain managed by Route 53 and an ACM certificate for HTTPS. It includes AWS WAF for security and a full CI/CD pipeline using AWS CodePipeline for automated blue/green deployments.
 
 ## Architecture
-- **Amazon S3**: Stores the static website content (HTML, CSS, JavaScript, images).
-- **Amazon CloudFront**: Acts as a Content Delivery Network (CDN) to cache and serve website content globally, improving performance and reducing latency. It's configured with an Origin Access Identity (OAI) to restrict direct access to the S3 bucket.
+- **Amazon S3**: Stores the static website content (HTML, CSS, JavaScript, images) in two separate "blue" and "green" buckets.
+- **Amazon CloudFront**: Acts as a Content Delivery Network (CDN) to cache and serve website content globally. It's configured with an Origin Access Identity (OAI) to restrict direct access to the S3 buckets and can switch between blue and green origins.
 - **AWS Certificate Manager (ACM)**: Provides an SSL/TLS certificate to enable HTTPS for the custom domain.
 - **Amazon Route 53**: Manages the DNS for the custom domain, pointing it to the CloudFront distribution.
-- **AWS WAF**: Provides a web application firewall to protect the CloudFront distribution against common web exploits and offers rate limiting to mitigate DDoS attacks.
+- **AWS WAF**: Provides a web application firewall to protect the CloudFront distribution against common web exploits and offers rate limiting.
+- **AWS CodePipeline**: Automates the build and deployment process, orchestrating blue/green deployments.
+- **AWS CodeBuild**: Used within the pipeline for building CDK assets, deploying to S3, and updating CloudFront.
+- **AWS IAM**: Manages permissions for pipeline actions and CodeBuild projects.
 
-## Security Enhancements with AWS WAF
+## Pre-Merge Checks / GitHub Actions
 
-This deployment includes AWS WAF (Web Application Firewall) associated with the CloudFront distribution, offering several security benefits:
+To ensure code quality and adherence to best practices before merging changes into the `main` branch, this project uses GitHub Actions to perform automated checks on pull requests.
 
-- **Protection Against Common Web Exploits**: WAF can help filter out malicious traffic such as SQL injection and Cross-Site Scripting (XSS), although the risk for purely static sites is primarily related to any client-side scripts interacting with external services.
-- **Rate Limiting**: A rate-based rule is configured to block IP addresses that exceed a certain number of requests within a 5-minute period. This helps protect against HTTP flood DDoS attacks and abusive bot activity. The default rate limit is set to 500 requests per 5 minutes per IP, but this can be customized.
-- **Managed Rule Sets (Optional)**: While not included by default in this basic setup, AWS WAF allows for the addition of AWS Managed Rule Groups (e.g., for Amazon IP reputation, known bad inputs) and custom rules to further enhance protection.
+### Linting Workflow (`.github/workflows/lint.yml`)
+- **Trigger:** Runs on pull requests targeting the `main` branch.
+- **Description:** This workflow executes `npm run lint`, which uses ESLint and Prettier to check the codebase for style consistency and potential syntax errors.
+- **Purpose:** To enforce a common code style, improve readability, and catch basic coding errors early in the development cycle.
+- **Resolving Issues:** If this workflow fails, developers are expected to fix the linting errors reported by the action. The `lint` script in `package.json` (`eslint . --ext .js,.ts --fix && prettier --write '**/*.{js,ts,json,md,yml}'`) can often fix many issues automatically when run locally.
 
-**Mitigations Already in Place (Complementary to WAF):**
-- **Origin Access Identity (OAI)**: CloudFront uses an OAI to access the S3 bucket, preventing direct public S3 bucket access.
-- **AWS Shield Standard**: Provides baseline protection against common network and transport layer DDoS attacks.
+### CDK Nag Workflow (`.github/workflows/cdk-nag.yml`)
+- **Trigger:** Runs on pull requests targeting the `main` branch.
+- **Description:** This workflow first installs dependencies and then runs `npx cdk synth`. Because `cdk-nag` has been programmatically integrated into the CDK application (in `bin/app.ts` via `AwsSolutionsChecks`), the `cdk synth` command will now also execute `cdk-nag` scans. The workflow uses `npx cdk-nag --fail-on-warnings` in the `cdk-nag.yml` file, but the programmatic integration means the `cdk synth` step itself will fail if there are any `cdk-nag` rule violations that are not suppressed.
+- **Purpose:** To automatically check the CDK application for adherence to AWS best practices, common security issues, and compliance with organizational guidelines using the `cdk-nag` tool.
+- **Resolving Issues:** If this workflow fails due to `cdk-nag` findings:
+    1.  **Fix the Issue:** The preferred method is to address the underlying issue in your CDK code according to the best practice highlighted by `cdk-nag`.
+    2.  **Suppress the Finding:** If a finding is deemed acceptable for specific reasons (e.g., a deliberate design choice that has been reviewed), you can add a `NagSuppression`. Suppressions are managed centrally in `bin/app.ts`.
+        Example of adding a suppression in `bin/app.ts`:
+        ```typescript
+        // In bin/app.ts, after stack instantiation
+        NagSuppressions.addStackSuppressions(yourStackInstance, [
+          { 
+            id: 'AwsSolutions-XYZ', // The ID of the rule to suppress
+            reason: 'A well-documented reason why this rule is being suppressed for this specific resource or context.' 
+          },
+        ]);
+        ```
+        You will need to identify the specific rule ID from the `cdk-nag` output and provide a clear justification for the suppression.
 
-**Recommendations for Ongoing Security Management:**
-1.  **AWS Budgets**: Configure AWS Budgets to alert you when your costs exceed predefined thresholds. This provides early notification of unusual spending, which could be an indicator of an attack.
-2.  **CloudWatch Alarms**:
-    - Monitor key CloudFront metrics: `Requests`, `BytesDownloaded`, `4xxErrorRate`, `5xxErrorRate`.
-    - Monitor WAF metrics: `BlockedRequests` for the rate-based rule and the WebACL itself.
-3.  **Regularly Review Logs**:
-    - Enable and periodically review CloudFront access logs (consider using Amazon Athena for querying).
-    - Enable and review WAF logs to understand blocked traffic and refine rules if necessary.
-4.  **CloudFront Geo-restrictions**: If your website targets a specific geographic audience, consider using CloudFront geo-restrictions in addition to WAF rules.
-5.  **Implement Strong Cache-Control Headers**: Maximize caching to reduce origin load and improve performance.
+These automated checks help maintain code quality and infrastructure best practices throughout the project.
 
-## Deployment
+## CI/CD Pipeline Overview
 
-**Configuration:**
+The deployment of the static website is automated using an AWS CodePipeline, which implements a blue/green strategy.
 
-The stack's behavior is primarily configured through properties in `bin/app.ts` and CDK context values (either in `cdk.json` or via CLI flags).
+**Pipeline Trigger:**
+The pipeline is triggered by commits to the `main` branch (or as configured in `lib/pipeline-stack.ts`) of your GitHub repository, after all pre-merge checks (GitHub Actions) have passed.
 
-1.  **Domain and Subdomain (in `bin/app.ts`):**
+**Pipeline Stages:**
+1.  **Source:** Fetches the latest code from the specified GitHub repository and branch using an AWS CodeStar Connection.
+    *   **Configuration Required:** You MUST update placeholder values for `GITHUB_OWNER`, `GITHUB_REPO`, and `CONNECTION_ARN` in `lib/pipeline-stack.ts` for this stage to function.
+2.  **Build:**
+    *   Installs dependencies (`npm ci`).
+    *   Synthesizes the CDK application (`npx cdk synth`). This step will also run `cdk-nag` checks due to the programmatic integration.
+    *   Prepares two artifacts:
+        *   `CdkOutputArtifact`: Contains the CloudFormation templates generated by CDK.
+        *   `SiteOutputArtifact`: Contains the static website files from the `site/` directory.
+3.  **DeployBlue:**
+    *   Deploys any infrastructure changes defined in `StaticSiteStack` (using `CdkOutputArtifact`).
+    *   Deploys the new website version from `SiteOutputArtifact` to the **blue** S3 bucket.
+    *   Invalidates the CloudFront cache for the blue environment paths.
+4.  **DeployGreen:**
+    *   **Manual Approval:** Waits for manual approval in the CodePipeline console before proceeding.
+    *   Deploys the new website version from `SiteOutputArtifact` to the **green** S3 bucket.
+    *   Invalidates the CloudFront cache for the green environment paths. (Note: At this point, the green environment is updated but not yet serving live traffic).
+5.  **PromoteToGreen:**
+    *   **Manual Approval:** Waits for manual approval to promote the green environment to live.
+    *   Updates the CloudFront distribution's default behavior to point its origin to the **green** S3 bucket.
+    *   Invalidates the CloudFront cache to ensure users get the latest content from the green environment.
+
+## Blue/Green Deployment Strategy
+
+This setup employs a blue/green deployment strategy to minimize downtime and risk when deploying new versions:
+
+1.  **Two Identical Environments:** Two separate S3 buckets, "blue" (`blue-your.domain.com`) and "green" (`green-your.domain.com`), serve as identical hosting environments.
+2.  **Staging Deployment:**
+    *   Initially, CloudFront points to the **blue** S3 bucket as the live environment.
+    *   New versions of the website are first deployed to the **blue** bucket (via the `DeployBlue` stage). This allows for testing the blue environment directly (e.g., by temporarily configuring a separate CloudFront behavior or using S3 website endpoints if enabled, though this pipeline focuses on CloudFront switching).
+    *   After the `DeployBlue` stage, the same new version is deployed to the **green** S3 bucket (after manual approval in the `DeployGreen` stage). The green environment can then be tested thoroughly (e.g., via a test URL or by directly accessing green bucket content if configured for it, or by temporarily pointing a test CloudFront distribution or behavior).
+3.  **Traffic Switching:**
+    *   After the `DeployGreen` stage and a manual approval in the `PromoteToGreen` stage, the pipeline updates the CloudFront distribution to switch its origin from the blue S3 bucket to the green S3 bucket.
+    *   This switch is near-instantaneous from CloudFront's perspective. Cache invalidation ensures users begin receiving content from the newly promoted green environment.
+4.  **Manual Approvals:**
+    *   **Deploy to Green:** A manual approval step is required before deploying the site content to the green S3 bucket. This allows for verification of the blue deployment or any other checks.
+    *   **Promote Green to Live:** A second manual approval step is required before switching CloudFront to point to the green S3 bucket. This is the final gate before the new version goes live.
+
+## How to Use/Interact with the Pipeline
+
+**Prerequisites:**
+
+1.  **AWS CDK Setup:** Ensure you have AWS CDK installed and configured.
+2.  **AWS Account and Region:**
+    *   Configure your AWS account and regions in `bin/app.ts`. The `StaticSiteStack` (including ACM certificate for CloudFront) is deployed to `us-east-1`. The `PipelineStack` can be deployed to your primary operational region (e.g., `us-east-2` or `CDK_DEFAULT_REGION`).
+3.  **GitHub Repository:** Your static website code should be in a GitHub repository.
+4.  **AWS CodeStar Connection:** Create an AWS CodeStar Connection to your GitHub account/organization. Note its ARN.
+5.  **Update Pipeline Configuration:**
+    Open `lib/pipeline-stack.ts` and update the following placeholder values in the `sourceAction` definition:
+    *   `owner`: Your GitHub username or organization name.
+    *   `repo`: The name of your GitHub repository.
+    *   `connectionArn`: The ARN of the CodeStar Connection you created.
+6.  **Domain and Subdomain (in `bin/app.ts`):**
     Open `bin/app.ts` and set:
-    - `domainName`: Your registered domain name (e.g., `example.com`). This is used for creating resource names, the S3 bucket, the ACM certificate, and as a fallback for the Route 53 zone name.
-    - `siteSubDomain`: Your desired subdomain (e.g., `www`).
-    - `wafRateLimit` (Optional): The maximum number of requests allowed from a single IP address within a 5-minute period before that IP is blocked. If not specified, it defaults to `500`. In the provided `bin/app.ts`, this is set to `1000`. You can adjust this value based on your expected traffic patterns.
-
-2.  **Route 53 Hosted Zone (via CDK Context):**
-    The `hostedZoneId` and `zoneName` for Route 53 are configured via CDK context. This is ideal for CI/CD.
-    - **`hostedZoneId`**: The ID of your public hosted zone in Route 53 (e.g., `Z0123456789ABCDEFGHIJ`).
-    - **`zoneName`**: The domain name of your hosted zone (e.g., `example.com`).
-
-    You can set these in `cdk.json` under the `context` key:
-    ```json
-    // cdk.json
-    {
-      "app": "...",
-      "context": {
-        // ... other context variables
-        "hostedZoneId": "YOUR_HOSTED_ZONE_ID_HERE",
-        "zoneName": "your.domain.com"
-      }
-    }
-    ```
-    Alternatively, pass them via CLI flags (these override `cdk.json` values):
+    *   `domainName`: Your registered domain name (e.g., `example.com`).
+    *   `siteSubDomain`: Your desired subdomain (e.g., `www`).
+7.  **Route 53 Hosted Zone (via CDK Context for initial deployment):**
+    If deploying for the first time or if CDK cannot automatically look up your hosted zone, you may need to provide `hostedZoneId` and `zoneName` as context parameters.
+    *   `hostedZoneId`: The ID of your public hosted zone in Route 53.
+    *   `zoneName`: The domain name of your hosted zone.
+    You can set these in `cdk.json` or pass them via CLI:
     ```bash
-    cdk deploy --context hostedZoneId=YOUR_HOSTED_ZONE_ID --context zoneName=YOUR_ZONE_NAME
-    ```
-    If not provided, the stack uses fallback placeholders defined in `lib/static-site-stack.ts` (`Z0123456789ABCDEFGHIJ` for `hostedZoneId` and `props.domainName` for `zoneName`). **Providing your actual `hostedZoneId` is crucial for successful deployment.**
-
-3.  **AWS Account and Region (in `bin/app.ts`):**
-    Configure the target AWS account and region in `bin/app.ts`:
-    ```typescript
-    // bin/app.ts
-    env: {
-      account: process.env.CDK_DEFAULT_ACCOUNT || 'YOUR_ACCOUNT_ID', // Or your specific account
-      region: process.env.CDK_DEFAULT_REGION || 'YOUR_REGION',   // Or your specific region
-    },
+    # Example for cdk.json
+    # {
+    #   "context": {
+    #     "hostedZoneId": "YOUR_HOSTED_ZONE_ID_HERE",
+    #     "zoneName": "your.domain.com"
+    #   }
+    # }
     ```
 
-**Deployment Commands:**
+**Initial Deployment:**
+
+To deploy both the `StaticSiteStack` (infrastructure) and the `PipelineStack` (CI/CD pipeline), run:
 ```bash
 # Install dependencies
 npm install
 
-# Bootstrap AWS environment (once per account/region)
-# Ensure us-east-1 is also bootstrapped if deploying the certificate there and it's different from your main stack region.
-npx cdk bootstrap aws://ACCOUNT-ID/REGION # Replace ACCOUNT-ID and REGION
+# Bootstrap AWS environment (once per account/region for CDK)
+# Ensure both the StaticSiteStack region (e.g., us-east-1) and PipelineStack region are bootstrapped.
+npx cdk bootstrap aws://ACCOUNT-ID/REGION # Replace ACCOUNT-ID and REGION for each region
 
-# Synthesize (optional, deploy does it too)
-# Values from cdk.json are used by default if not overridden by --context
-npx cdk synth 
-# Or with CLI context:
-# npx cdk synth --context hostedZoneId=YOUR_HOSTED_ZONE_ID --context zoneName=YOUR_ZONE_NAME
-
-# Deploy the stack
-# Values from cdk.json are used by default if not overridden by --context
-npx cdk deploy
-# Or with CLI context:
-# npx cdk deploy --context hostedZoneId=YOUR_HOSTED_ZONE_ID --context zoneName=YOUR_ZONE_NAME
+# Deploy all stacks
+npx cdk deploy --all --context hostedZoneId=YOUR_HOSTED_ZONE_ID --context zoneName=YOUR_ZONE_NAME
+# The --context flags might only be needed for the very first deployment if not set in cdk.json
 ```
+**Note:** The `wafRateLimit` is an optional parameter in `bin/app.ts` for the `StaticSiteStack` that defaults to `500` if not set. It's currently commented out in the provided `bin/app.ts`.
 
-**Important Notes:**
-- The ACM certificate for CloudFront must be in `us-east-1`. The stack handles this.
-- Ensure your domain's NS records at your registrar point to the Route 53 name servers for the specified hosted zone.
-- DNS validation for ACM will attempt to create CNAME records in your Route 53 hosted zone.
+**Monitoring the Pipeline:**
 
-## CI/CD Pipeline for Content Updates
+1.  Navigate to the **AWS CodePipeline** console in your AWS account.
+2.  Find the pipeline named `StaticSiteBlueGreenPipeline` (or as configured).
+3.  You can view the progress of each stage, logs, and any errors.
 
-Automating the deployment of your website content (HTML, CSS, JS, images) is highly recommended. Here's a typical workflow:
+**Manual Approvals:**
 
-1.  **Trigger**:
-    - A code push to a specific branch (e.g., `main`, `master`, or `prod`) in your Git repository (e.g., GitHub, AWS CodeCommit, GitLab).
+When the pipeline reaches a manual approval step:
+1.  It will pause and show "Waiting for approval" in the CodePipeline console.
+2.  Click on the "Review" button for the approval action.
+3.  Review the details and then "Approve" or "Reject" the action.
+    *   **ApproveGreenDeployment:** Approve to deploy the built site to the green S3 bucket.
+    *   **ApprovePromoteToGreen:** Approve to switch CloudFront traffic to the green S3 bucket, making it live.
 
-2.  **Build (Optional)**:
-    - If you're using a static site generator (SSG) like Hugo, Jekyll, Next.js (static export), Gatsby, etc., this step involves running the build command (e.g., `npm run build`, `hugo`) to compile your site into static files (typically in a `public/`, `dist/`, or `_site/` folder).
-    - For plain HTML/CSS/JS sites, this step might include linting, minification, or other asset optimization.
+## Rollback Strategy
 
-3.  **Deploy to S3**:
-    - Synchronize your static files to the S3 website bucket. The bucket name is derived from `siteSubDomain` and `domainName` (e.g., `www.your.domain.com`).
-    - Use the AWS CLI `s3 sync` command. The `--delete` flag is crucial as it removes files from S3 that are no longer in your source folder, ensuring a clean deployment.
-      ```bash
-      aws s3 sync ./site/ s3://your-bucket-name --delete
-      # Replace your-bucket-name with the S3 bucket name (e.g., www.example.com).
-      # This command syncs the content of your local 'site/' directory to the S3 bucket.
-      ```
+The blue/green setup provides a straightforward rollback mechanism:
 
-4.  **CloudFront Invalidation**:
-    - After successfully syncing files to S3, you need to tell CloudFront to fetch the updated content from the origin (S3). This is done by creating an invalidation.
-    - The CloudFront Distribution ID is an output of the `cdk deploy` command (or can be found in the AWS Console).
-      ```bash
-      aws cloudfront create-invalidation --distribution-id YOUR_DISTRIBUTION_ID --paths "/*"
-      # Replace YOUR_DISTRIBUTION_ID with your actual CloudFront distribution ID.
-      ```
+1.  **Immediate Rollback (Manual CloudFront Update):** If the green environment (now live) shows issues, you can manually update the CloudFront distribution in the AWS console or via AWS CLI to point back to the `blueOrigin` (the S3 origin for the blue bucket). This would be the quickest way to revert. You would then need to invalidate the cache.
+2.  **Pipeline Redeployment:** Deploy a previous, stable commit by manually triggering the pipeline for that commit or by reverting the problematic commit in your Git repository and pushing the change. The pipeline will then deploy this older version through the blue/green process.
+3.  **No "PromoteToBlue" Stage:** The current pipeline does not have an automated "PromoteToBlue" stage. Adding such a stage would be an enhancement for a more automated rollback.
 
-**Cache-Busting Filenames:**
+## Local Development/Testing
 
-- **Technique**: This involves embedding a hash of the file's content into its name (e.g., `main.a1b2c3d4.css`, `bundle.x7y8z9w0.js`). When a file's content changes, its name (and hash) changes.
-- **Benefits**:
-    - Users receive the latest versions immediately because their browsers will request a new file (due to the changed name).
-    - Avoids reliance on CloudFront cache expiry or waiting for invalidation propagation.
-    - Allows for very long cache times (e.g., `Cache-Control: public, max-age=31536000, immutable`) for versioned assets, improving performance.
-    - Your main `index.html` file should have a short cache time or `Cache-Control: no-cache` to ensure it always references the latest hashed assets.
-- **Implementation**: Most modern static site generators and build tools (like Webpack, Rollup, Parcel) handle this automatically.
+For static website content (HTML, CSS, JavaScript):
+1.  Develop and test your website files locally in your preferred development environment.
+2.  Most modern browsers allow you to open HTML files directly from your local file system to preview changes.
+3.  Once you are satisfied with your changes, commit them to your Git repository and push to the `main` branch (or your designated trigger branch) to initiate the CI/CD pipeline.
 
-**Role of CloudFront Invalidations:**
+## Security
+This deployment includes AWS WAF with a default rate-limiting rule. See the "Testing AWS WAF Rate-Based Rule" section for details on how to test this. You can customize WAF rules further as needed.
 
-- **Purpose**: Invalidations instruct CloudFront to mark cached objects at its edge locations as "expired." The next time a user requests an invalidated object, CloudFront fetches the latest version from the S3 origin.
-- **`/*` Invalidation**: Invalidating all paths with `/*` is a blanket approach. It's simple but can be costly if you have many objects and update frequently, as AWS charges for invalidation paths (though there's a monthly free tier).
-- **Specific Path Invalidations**: If you know which files have changed, you can invalidate only those specific paths (e.g., `/css/style.css`, `/js/main.js`). This is more cost-effective.
-- **Propagation Delay**: Even after an invalidation is created, it takes some time (typically a few minutes) for it to propagate across all CloudFront edge locations. Cache-busting filenames are a more robust solution for immediate updates.
-
-**Automation Tools:**
-
-This entire CI/CD pipeline can be automated using services like:
-- **GitHub Actions**
-- **AWS CodePipeline** (integrates well with AWS CodeCommit, CodeBuild, S3, etc.)
-- **GitLab CI/CD**
-- **Jenkins**, and others.
-
-These tools can listen for Git pushes, run build commands, execute S3 sync, and trigger CloudFront invalidations automatically.
+**Recommendations for Ongoing Security Management:**
+1.  **AWS Budgets**: Configure AWS Budgets to alert you on cost thresholds.
+2.  **CloudWatch Alarms**: Monitor CloudFront (`Requests`, `BytesDownloaded`, `4xxErrorRate`, `5xxErrorRate`) and WAF (`BlockedRequests`) metrics.
+3.  **Regularly Review Logs**: Enable and review CloudFront and WAF access logs.
+4.  **CloudFront Geo-restrictions**: Consider if applicable.
+5.  **Strong Cache-Control Headers**: While the pipeline handles invalidations, proper cache-control headers for assets are still a good practice.
 
 ## Testing AWS WAF Rate-Based Rule
+The WAF is configured with a rate-based rule. The default `wafRateLimit` is 500 requests per 5-minute period per IP (if not overridden in `bin/app.ts`).
 
-This section explains how to test the AWS WAF rate-based rule functionality.
-
-The WAF is configured with a rate-based rule. By default, this is set in `lib/static-site-stack.ts` to 500 requests per 5-minute period per IP, but it's overridden in `bin/app.ts` to 1000 requests. Adjust this value in `bin/app.ts` (`wafRateLimit`) as needed for your expected traffic.
-
-**Prerequisites for testing:**
-
-*   The CDK stack must be successfully deployed.
-*   You need the website URL (either the CloudFront distribution URL like `d123example.cloudfront.net` or your configured custom domain like `www.example.com`).
-
-**Testing Steps (General Guidance):**
-
-You can test the rate-limiting by simulating a high volume of requests from a single IP address. Tools like Apache Bench (`ab`), `curl` in a loop, or simple scripts can be used for this.
-
-Example using `curl` (run from a Linux/macOS terminal):
+**Testing Steps:**
+Use a tool like `curl` in a loop from a single IP:
 ```bash
-# Replace YOUR_WEBSITE_URL with your actual site URL (e.g., https://www.example.com or https://d123example.cloudfront.net)
-# This sends 1200 requests. Adjust count based on your wafRateLimit (e.g., if 1000, send ~1100-1200).
-for i in {1..1200}; do curl -s -o /dev/null -w "%{http_code}\n" YOUR_WEBSITE_URL; sleep 0.1; done
+# Replace YOUR_WEBSITE_URL (e.g., https://www.example.com)
+# Send slightly more requests than your configured limit.
+for i in {1..600}; do curl -s -o /dev/null -w "%{http_code}\n" YOUR_WEBSITE_URL; sleep 0.1; done
 ```
-
 **Expected Outcome:**
-
-*   Initially, you should see `200` (OK) responses.
-*   After exceeding the rate limit (e.g., 1000 requests within 5 minutes for the default configuration in `bin/app.ts`), you should start seeing `403` (Forbidden) responses from CloudFront. This indicates that AWS WAF has blocked the requests from your IP.
-*   The block will typically last for a few minutes for rate-based rules before the IP is automatically unblocked, unless further requests from the same IP keep it above the threshold.
+Initially, `200` (OK) responses. After exceeding the rate limit, `403` (Forbidden) responses from CloudFront.
 
 **Verification in AWS Console:**
+1.  Navigate to **WAF & Shield** > **Web ACLs**.
+2.  Select your Web ACL (e.g., `SiteWebACL`).
+3.  View the **Overview** tab for graphs of allowed/blocked requests and the **Sampled requests** tab for details.
+4.  Check associated CloudWatch metrics.
 
-You can monitor WAF activity in the AWS Management Console:
-
-1.  Navigate to the **WAF & Shield** console.
-2.  In the navigation pane, under **AWS WAF**, choose **Web ACLs**.
-3.  Select your Web ACL from the list (e.g., `SiteWebACL` or the name you configured).
-4.  On the **Overview** tab, you can see graphs of allowed and blocked requests. Look for an increase in blocked requests by the rate-based rule.
-5.  The **Sampled requests** tab can show details of requests that WAF has evaluated, including those that were blocked.
-6.  Associated CloudWatch metrics for the Web ACL (e.g., `webACLMetric` and `RateLimitRuleMetric`) will also show allowed vs. blocked requests over time. You can find these in the CloudWatch console.
-
-**Important Considerations:**
-
-*   **Testing Costs**: Be mindful of any potential costs associated with CloudFront data transfer or WAF requests, though these should be minimal for this type of isolated test.
-*   **Authorization**: Ensure you are only testing against your own resources and have proper authorization.
-*   **Timing and Count**: The exact number of requests needed to trigger the block might vary slightly due to how WAF aggregates requests over its 5-minute evaluation period. Sending a burst slightly over the limit is a good way to test.
-*   **IP Address**: Ensure the test traffic originates from a consistent public IP address that WAF can track. If you are behind a corporate NAT or VPN, all users sharing that egress IP will contribute to the same rate limit count.
+**Considerations:** Testing costs, authorization, timing, and consistent IP address for testing.
