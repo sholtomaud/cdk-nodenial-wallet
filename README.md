@@ -122,9 +122,9 @@ Automating the deployment of your website content (HTML, CSS, JS, images) is hig
     - Synchronize your static files to the S3 website bucket. The bucket name is derived from `siteSubDomain` and `domainName` (e.g., `www.your.domain.com`).
     - Use the AWS CLI `s3 sync` command. The `--delete` flag is crucial as it removes files from S3 that are no longer in your source folder, ensuring a clean deployment.
       ```bash
-      aws s3 sync ./your-public-folder/ s3://your-bucket-name --delete
-      # Replace ./your-public-folder/ with the actual path to your built static files.
+      aws s3 sync ./site/ s3://your-bucket-name --delete
       # Replace your-bucket-name with the S3 bucket name (e.g., www.example.com).
+      # This command syncs the content of your local 'site/' directory to the S3 bucket.
       ```
 
 4.  **CloudFront Invalidation**:

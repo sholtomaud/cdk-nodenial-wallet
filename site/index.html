@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Smeaton's Water Wheel Experiment</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <header>
+        <h1>Smeaton's Water Wheel Experiment</h1>
+    </header>
+
+    <main>
+        <section id="simulation-controls">
+            <h2>Controls</h2>
+            <div id="controls-container">
+                <!-- Parameter controls will be injected here by JS -->
+            </div>
+        </section>
+
+        <section id="animation-section">
+            <h2>Water Wheel Animation</h2>
+            <div id="waterwheel-animation-container">
+                <!-- Water wheel animation will be rendered here (e.g., in a canvas) -->
+            </div>
+        </section>
+
+        <section id="charts-section">
+            <h2>Analysis</h2>
+            <div id="timeseries-chart-container">
+                <h3>Time-Series Data</h3>
+                <!-- Time-series chart will be rendered here -->
+            </div>
+            <div id="pareto-plot-container">
+                <h3>3D Pareto Plot (Power, Efficiency, Speed)</h3>
+                <!-- 3D Pareto plot will be rendered here -->
+            </div>
+        </section>
+
+        <section id="data-table-section">
+            <h2>Experimental Data Log</h2>
+            <div id="smeaton-table-container">
+                <!-- Smeaton-style data table will be rendered here -->
+            </div>
+        </section>
+    </main>
+
+    <footer>
+        <p>An interactive simulation based on John Smeaton's experiments.</p>
+    </footer>
+
+    <script src="js/app.js" type="module"></script>
+</body>
+</html>
