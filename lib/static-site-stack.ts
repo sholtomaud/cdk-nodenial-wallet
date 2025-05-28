@@ -5,13 +5,13 @@ import * as route53 from 'aws-cdk-lib/aws-route53';
 import * as acm from 'aws-cdk-lib/aws-certificatemanager';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as origins from 'aws-cdk-lib/aws-cloudfront-origins';
-import * as wafv2 from 'aws-cdk-lib/aws-wafv2';
+// import * as wafv2 from 'aws-cdk-lib/aws-wafv2';
 import { Construct } from 'constructs';
 
 export interface StaticSiteStackProps extends cdk.StackProps {
   domainName: string;
   siteSubDomain: string;
-  wafRateLimit?: number;
+  // wafRateLimit?: number;
 }
 
 export class StaticSiteStack extends cdk.Stack {
@@ -19,37 +19,39 @@ export class StaticSiteStack extends cdk.Stack {
     super(scope, id, props);
 
     const siteDomain = props.siteSubDomain + '.' + props.domainName;
-    const rateLimit = props.wafRateLimit ?? 500;
+
+    // const rateLimit = props.wafRateLimit ?? 500;
 
     // WAF v2 WebACL for CloudFront
-    const webAcl = new wafv2.CfnWebACL(this, 'WebACL', {
-      name: 'SiteWebACL',
-      scope: 'CLOUDFRONT',
-      defaultAction: { allow: {} },
-      visibilityConfig: {
-        cloudWatchMetricsEnabled: true,
-        metricName: 'webACLMetric',
-        sampledRequestsEnabled: true,
-      },
-      rules: [
-        {
-          name: 'RateLimitRule',
-          priority: 1,
-          action: { block: {} },
-          statement: {
-            rateBasedStatement: {
-              limit: rateLimit,
-              aggregateKeyType: 'IP',
-            },
-          },
-          visibilityConfig: {
-            cloudWatchMetricsEnabled: true,
-            metricName: 'RateLimitRuleMetric',
-            sampledRequestsEnabled: true,
-          },
-        },
-      ],
-    });
+    // const webAcl = new wafv2.CfnWebACL(this, 'WebACL', {
+    //   name: 'SiteWebACL',
+    //   scope: 'CLOUDFRONT',
+    //   defaultAction: { allow: {} },
+    //   visibilityConfig: {
+    //     cloudWatchMetricsEnabled: true,
+    //     metricName: 'webACLMetric',
+    //     sampledRequestsEnabled: true,
+    //   },
+    //   rules: [
+    //     {
+    //       name: 'RateLimitRule',
+    //       priority: 1,
+    //       action: { block: {} },
+    //       statement: {
+    //         rateBasedStatement: {
+    //           limit: rateLimit,
+    //           aggregateKeyType: 'IP',
+    //         },
+    //       },
+    //       visibilityConfig: {
+    //         cloudWatchMetricsEnabled: true,
+    //         metricName: 'RateLimitRuleMetric',
+    //         sampledRequestsEnabled: true,
+    //       },
+    //     },
+    //   ],
+    // });
+
 
     // S3 bucket for static website hosting
     const siteBucket = new s3.Bucket(this, 'SiteBucket', {
@@ -98,7 +100,8 @@ export class StaticSiteStack extends cdk.Stack {
       domainNames: [siteDomain],
       certificate: certificate,
     // Associate WAF
-    webAclId: webAcl.attrArn,
+    // webAclId: webAcl.attrArn,
+
       defaultBehavior: {
         origin: new origins.S3Origin(siteBucket, { originAccessIdentity: oai }),
         allowedMethods: cloudfront.AllowedMethods.ALLOW_GET_HEAD,

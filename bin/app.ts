@@ -22,7 +22,8 @@ new StaticSiteStack(app, 'StaticSiteStack', {
   domainName: domainName,
   siteSubDomain: siteSubDomain,
   description: `Static site hosting for ${siteSubDomain}.${domainName}`,
-  wafRateLimit: 1000,
+  // wafRateLimit: 1000,
+
 });
 
 app.synth();
